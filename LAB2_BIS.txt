@@ -1,0 +1,111 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Start and goal
+start = np.array([1, 1])
+goal = np.array([9, 9])
+
+# Obstacles
+obstacles = [
+    [3, 3, 5, 6],
+    [6, 2, 8, 4],
+    [6, 7, 8, 9]
+]
+
+# PSO settings
+particles = 30
+iterations = 100
+
+# Create particles
+position = np.random.rand(particles, 2) * 10
+velocity = np.zeros((particles, 2))
+
+best_position = position.copy()
+best_cost = np.ones(particles) * 9999
+
+global_best = position[0]
+global_cost = 9999
+
+
+# Cost function
+def cost(point):
+
+    distance = np.linalg.norm(point - start)
+    distance += np.linalg.norm(goal - point)
+
+    # Obstacle penalty
+    for o in obstacles:
+        if o[0] <= point[0] <= o[2] and o[1] <= point[1] <= o[3]:
+            distance += 1000
+
+    return distance
+
+
+# PSO algorithm
+for i in range(iterations):
+
+    for j in range(particles):
+
+        c = cost(position[j])
+
+        if c < best_cost[j]:
+            best_cost[j] = c
+            best_position[j] = position[j].copy()
+
+        if c < global_cost:
+            global_cost = c
+            global_best = position[j].copy()
+
+    for j in range(particles):
+
+        r1 = np.random.rand(2)
+        r2 = np.random.rand(2)
+
+        velocity[j] = (
+            0.7 * velocity[j]
+            + 1.5 * r1 * (best_position[j] - position[j])
+            + 1.5 * r2 * (global_best - position[j])
+        )
+
+        position[j] += velocity[j]
+
+        position[j] = np.clip(position[j], 0, 10)
+
+
+# Print result
+print("Robot Start:", start)
+print("Robot Goal:", goal)
+print("Best Waypoint:", global_best)
+print("Best Cost:", round(global_cost, 2))
+
+
+# Draw obstacles
+plt.figure(figsize=(7, 7))
+
+for o in obstacles:
+    plt.fill(
+        [o[0], o[2], o[2], o[0]],
+        [o[1], o[1], o[3], o[3]],
+        color="red"
+    )
+
+# Draw start and goal
+plt.scatter(start[0], start[1], color="green", s=150, label="Start")
+plt.scatter(goal[0], goal[1], color="blue", s=150, label="Goal")
+
+# Draw robot path
+x = [start[0], global_best[0], goal[0]]
+y = [start[1], global_best[1], goal[1]]
+
+plt.plot(x, y, "k-", linewidth=3, label="PSO Path")
+
+plt.xlim(0, 10)
+plt.ylim(0, 10)
+
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.title("Robot Path Planning using PSO")
+
+plt.grid()
+plt.legend()
+plt.show()
