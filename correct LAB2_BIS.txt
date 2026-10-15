@@ -1,0 +1,200 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import heapq
+from math import sqrt
+
+# Start and goal
+start = (1, 1)
+goal = (9, 9)
+
+# Obstacles: [xmin, ymin, xmax, ymax]
+obstacles = [
+    [3, 3, 5, 6],
+    [6, 2, 8, 4],
+    [6, 7, 8, 9]
+]
+
+# Grid settings
+resolution = 0.1
+grid_size = int(10 / resolution) + 1
+
+# Convert coordinates to grid indices
+def to_grid(point):
+    return (int(round(point[0] / resolution)),
+            int(round(point[1] / resolution)))
+
+def to_world(node):
+    return (node[0] * resolution,
+            node[1] * resolution)
+
+start_node = to_grid(start)
+goal_node = to_grid(goal)
+
+# Create obstacle map
+blocked = np.zeros((grid_size, grid_size), dtype=bool)
+
+for x in range(grid_size):
+    for y in range(grid_size):
+        wx, wy = to_world((x, y))
+
+        for ox1, oy1, ox2, oy2 in obstacles:
+            if ox1 <= wx <= ox2 and oy1 <= wy <= oy2:
+                blocked[x, y] = True
+
+# Check whether a grid node is safe
+def is_free(node):
+    x, y = node
+    return (
+        0 <= x < grid_size
+        and 0 <= y < grid_size
+        and not blocked[x, y]
+    )
+
+# A* heuristic: Euclidean distance
+def heuristic(a, b):
+    return sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
+
+# Eight possible movement directions
+moves = [
+    (-1, 0), (1, 0), (0, -1), (0, 1),
+    (-1, -1), (-1, 1), (1, -1), (1, 1)
+]
+
+def astar(start_node, goal_node):
+    open_set = [(heuristic(start_node, goal_node), 0, start_node)]
+
+    came_from = {}
+    g_score = {start_node: 0}
+    closed = set()
+
+    while open_set:
+        _, current_cost, current = heapq.heappop(open_set)
+
+        if current in closed:
+            continue
+
+        if current == goal_node:
+            path = [current]
+
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+
+            path.reverse()
+            return [to_world(p) for p in path]
+
+        closed.add(current)
+
+        for dx, dy in moves:
+            neighbor = (current[0] + dx, current[1] + dy)
+
+            if not is_free(neighbor) or neighbor in closed:
+                continue
+
+            # Prevent diagonal movement through obstacle corners
+            if dx != 0 and dy != 0:
+                side1 = (current[0] + dx, current[1])
+                side2 = (current[0], current[1] + dy)
+
+                if not is_free(side1) or not is_free(side2):
+                    continue
+
+            step_cost = sqrt(2) if dx != 0 and dy != 0 else 1
+            tentative_g = g_score[current] + step_cost
+
+            if tentative_g < g_score.get(neighbor, float("inf")):
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+
+                f_score = tentative_g + heuristic(neighbor, goal_node)
+                heapq.heappush(
+                    open_set, (f_score, tentative_g, neighbor)
+                )
+
+    return None
+
+# Find collision-free path
+if not is_free(start_node) or not is_free(goal_node):
+    raise ValueError("Start or goal lies inside an obstacle.")
+
+path = astar(start_node, goal_node)
+
+if path is None:
+    raise RuntimeError("No collision-free path found.")
+
+path = np.array(path)
+
+# Calculate path length
+path_length = np.sum(
+    np.linalg.norm(np.diff(path, axis=0), axis=1)
+)
+
+# Print results
+print("Robot Start:", start)
+print("Robot Goal:", goal)
+print("Number of path points:", len(path))
+print("Path Length:", round(path_length, 2))
+print("Collision-free path found!")
+
+# Plot the environment and path
+fig, ax = plt.subplots(figsize=(9, 9))
+
+# Draw obstacles
+for i, o in enumerate(obstacles):
+    ax.fill(
+        [o[0], o[2], o[2], o[0]],
+        [o[1], o[1], o[3], o[3]],
+        color="red",
+        alpha=0.75,
+        edgecolor="darkred",
+        linewidth=2,
+        label="Obstacle (No Entry)" if i == 0 else None,
+        zorder=2
+    )
+
+# Draw the planned path
+ax.plot(
+    path[:, 0], path[:, 1],
+    color="black",
+    linewidth=2.5,
+    label="A* Collision-Free Path",
+    zorder=4
+)
+
+# Draw start and goal
+ax.scatter(
+    *start, color="green", s=180,
+    edgecolors="black", label="Source", zorder=5
+)
+
+ax.scatter(
+    *goal, color="blue", s=180,
+    edgecolors="black", label="Destination", zorder=5
+)
+
+# Mark direction of travel
+for i in range(0, len(path) - 1, 10):
+    p1 = path[i]
+    p2 = path[min(i + 1, len(path) - 1)]
+
+    ax.annotate(
+        "",
+        xy=p2,
+        xytext=p1,
+        arrowprops=dict(arrowstyle="->", color="black", lw=1.2),
+        zorder=6
+    )
+
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 10)
+ax.set_aspect("equal", adjustable="box")
+ax.set_xticks(np.arange(0, 10.1, 1))
+ax.set_yticks(np.arange(0, 10.1, 1))
+ax.set_xlabel("X Coordinate")
+ax.set_ylabel("Y Coordinate")
+ax.set_title("Robot Path Planning Using A* Algorithm")
+
+ax.grid(True, linestyle="--", alpha=0.4)
+ax.legend(loc="upper left")
+plt.tight_layout()
+plt.show()
