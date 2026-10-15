@@ -1,0 +1,240 @@
+
+import numpy as np
+import matplotlib.pyplot as plt
+import heapq
+import random
+from scipy.interpolate import splprep, splev
+
+# Reproducible results
+np.random.seed(42)
+random.seed(42)
+
+# Workspace and obstacles
+START = (2, 2)
+GOAL = (28, 28)
+
+obstacles = [
+    (8, 8, 3),
+    (15, 15, 4),
+    (22, 21, 3),
+    (10, 23, 2)
+]
+
+GRID_SIZE = 31
+grid = np.zeros((GRID_SIZE, GRID_SIZE), dtype=int)
+
+# Mark circular obstacles on the grid
+for ox, oy, radius in obstacles:
+    for x in range(GRID_SIZE):
+        for y in range(GRID_SIZE):
+            if (x - ox)**2 + (y - oy)**2 <= radius**2:
+                grid[y, x] = 1
+
+# Ensure start and goal are free
+grid[START[1], START[0]] = 0
+grid[GOAL[1], GOAL[0]] = 0
+
+# Eight possible movement directions
+MOVES = [
+    (1, 0), (-1, 0), (0, 1), (0, -1),
+    (1, 1), (1, -1), (-1, 1), (-1, -1)
+]
+
+def valid(x, y):
+    return (
+        0 <= x < GRID_SIZE
+        and 0 <= y < GRID_SIZE
+        and grid[y, x] == 0
+    )
+
+def neighbors(node):
+    x, y = node
+    result = []
+    for dx, dy in MOVES:
+        nx, ny = x + dx, y + dy
+        if valid(nx, ny):
+            # Prevent diagonal movement through obstacle corners
+            if dx != 0 and dy != 0:
+                if not valid(x + dx, y) or not valid(x, y + dy):
+                    continue
+            cost = np.sqrt(dx**2 + dy**2)
+            result.append(((nx, ny), cost))
+    return result
+
+# 1. Dijkstra: find an initial shortest grid path
+def dijkstra(start, goal):
+    queue = [(0, start)]
+    distance = {start: 0}
+    parent = {}
+
+    while queue:
+        cost, current = heapq.heappop(queue)
+
+        if current == goal:
+            break
+        if cost > distance[current]:
+            continue
+
+        for nxt, step_cost in neighbors(current):
+            new_cost = cost + step_cost
+            if new_cost < distance.get(nxt, float("inf")):
+                distance[nxt] = new_cost
+                parent[nxt] = current
+                heapq.heappush(queue, (new_cost, nxt))
+
+    if goal not in distance:
+        raise ValueError("No path found. Change the obstacle layout.")
+
+    path = [goal]
+    while path[-1] != start:
+        path.append(parent[path[-1]])
+    return path[::-1]
+
+initial_path = dijkstra(START, GOAL)
+
+# 2. Ant Colony Optimization on the free-space graph
+def path_length(path):
+    return sum(
+        np.linalg.norm(np.array(b) - np.array(a))
+        for a, b in zip(path[:-1], path[1:])
+    )
+
+def aco(start, goal, ants=35, iterations=60,
+        alpha=1.0, beta=3.0, evaporation=0.25):
+    pheromone = {}
+    best_path = None
+    best_length = float("inf")
+
+    # Include all valid graph edges
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            if valid(x, y):
+                for nxt, _ in neighbors((x, y)):
+                    pheromone[((x, y), nxt)] = 1.0
+
+    for _ in range(iterations):
+        candidates = []
+
+        for _ in range(ants):
+            current = start
+            path = [current]
+            visited = {current}
+
+            for _ in range(GRID_SIZE * GRID_SIZE):
+                if current == goal:
+                    break
+
+                options = [
+                    (nxt, cost)
+                    for nxt, cost in neighbors(current)
+                    if nxt not in visited
+                ]
+                if not options:
+                    break
+
+                weights = []
+                for nxt, cost in options:
+                    tau = pheromone.get((current, nxt), 1e-6)
+                    eta = 1.0 / cost
+                    weights.append((tau ** alpha) * (eta ** beta))
+
+                weights = np.array(weights, dtype=float)
+                weights /= weights.sum()
+                index = np.random.choice(len(options), p=weights)
+
+                current = options[index][0]
+                path.append(current)
+                visited.add(current)
+
+            if path[-1] == goal:
+                length = path_length(path)
+                candidates.append((path, length))
+                if length < best_length:
+                    best_path = path
+                    best_length = length
+
+        # Evaporation
+        for edge in pheromone:
+            pheromone[edge] *= (1 - evaporation)
+
+        # Reinforce successful paths
+        for path, length in candidates:
+            deposit = 1.0 / max(length, 1e-9)
+            for a, b in zip(path[:-1], path[1:]):
+                pheromone[(a, b)] += deposit
+
+        # Reinforce the best path found so far
+        if best_path is not None:
+            for a, b in zip(best_path[:-1], best_path[1:]):
+                pheromone[(a, b)] += 2.0 / best_length
+
+    return best_path if best_path is not None else initial_path
+
+optimized_path = aco(START, GOAL)
+
+# 3. Smooth the path with a cubic B-spline
+def smooth_path(path, samples=300):
+    points = np.array(path, dtype=float)
+
+    # Remove repeated points
+    points = np.unique(points, axis=0)
+    if len(points) < 4:
+        return points[:, 0], points[:, 1]
+
+    try:
+        tck, _ = splprep(
+            [points[:, 0], points[:, 1]],
+            s=1.5,
+            k=3
+        )
+        u = np.linspace(0, 1, samples)
+        sx, sy = splev(u, tck)
+        return np.array(sx), np.array(sy)
+    except (ValueError, TypeError):
+        return points[:, 0], points[:, 1]
+
+sx, sy = smooth_path(optimized_path)
+
+# 4. Plot the results
+fig, ax = plt.subplots(figsize=(10, 9))
+
+# Obstacle regions
+for ox, oy, radius in obstacles:
+    circle = plt.Circle(
+        (ox, oy), radius,
+        color="black", alpha=0.75
+    )
+    ax.add_patch(circle)
+
+# Initial Dijkstra path
+ix, iy = zip(*initial_path)
+ax.plot(ix, iy, "--", color="royalblue",
+        linewidth=2, label="Dijkstra path")
+
+# ACO optimized path
+ax.plot(*zip(*optimized_path), color="darkorange",
+        linewidth=2, label="ACO optimized path")
+
+# Smoothed trajectory
+ax.plot(sx, sy, color="limegreen",
+        linewidth=2.5, label="Smoothed trajectory")
+
+ax.scatter(*START, color="green", s=120,
+           marker="o", label="Start", zorder=5)
+ax.scatter(*GOAL, color="red", s=150,
+           marker="*", label="Goal", zorder=5)
+
+ax.set_xlim(0, GRID_SIZE - 1)
+ax.set_ylim(0, GRID_SIZE - 1)
+ax.set_aspect("equal")
+ax.set_xlabel("X coordinate")
+ax.set_ylabel("Y coordinate")
+ax.set_title("Graph-Based Ant-Like Optimal Path Planning")
+ax.grid(True, alpha=0.25)
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+print(f"Dijkstra path length: {path_length(initial_path):.2f}")
+print(f"ACO path length:      {path_length(optimized_path):.2f}")
+print("Graph generated successfully.")
